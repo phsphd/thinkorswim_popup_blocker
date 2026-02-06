@@ -1,0 +1,110 @@
+(() => {
+  const TAG = "[tos-toast-block]";
+  const patterns = [
+    /has been submitted/i,
+    /\bSGW:TOSWeb\b/i,
+    /\b(BUY|SELL)\b/i,
+    /\b(Weeklys|CALL|PUT|LMT|MKT)\b/i
+  ];
+
+  const hidden = new WeakMap(); // el -> previous inline style
+  const marked = new WeakSet();
+
+  const isVisible = (el) => {
+    const s = getComputedStyle(el);
+    return s.display !== "none" && s.visibility !== "hidden" && s.opacity !== "0";
+  };
+
+  const looksLikeToastContainer = (el) => {
+    if (!(el instanceof HTMLElement)) return false;
+    const r = el.getBoundingClientRect();
+    if (r.width < 250 || r.height < 30 || r.height > 220) return false;
+
+    const s = getComputedStyle(el);
+    const posOk = (s.position === "fixed" || s.position === "sticky" || s.position === "absolute");
+    if (!posOk) return false;
+
+    // Often near the top; allow some slack
+    const nearTop = r.top >= -5 && r.top <= 200;
+    if (!nearTop) return false;
+
+    // Usually overlay-ish
+    const z = parseInt(s.zIndex || "0", 10) || 0;
+    const overlayish = z >= 10 || s.position === "fixed" || s.position === "sticky";
+
+    return overlayish;
+  };
+
+  const hideEl = (el) => {
+    if (!el || marked.has(el)) return;
+    marked.add(el);
+
+    // Store old inline style so you can restore if needed
+    if (!hidden.has(el)) hidden.set(el, el.getAttribute("style") || "");
+
+    el.style.setProperty("display", "none", "important");
+    el.style.setProperty("visibility", "hidden", "important");
+    el.style.setProperty("pointer-events", "none", "important");
+    el.setAttribute("data-tos-toast-hidden", "1");
+    console.log(TAG, "hid:", el);
+  };
+
+  const findAndHide = (root = document) => {
+    // Scan a limited set: div/spans/p’s are enough for toasts
+    const nodes = root.querySelectorAll?.("div, span, p") || [];
+    for (const n of nodes) {
+      const t = (n.innerText || n.textContent || "").trim();
+      if (!t) continue;
+
+      // Must match at least TWO patterns to avoid hiding normal UI text
+      let hits = 0;
+      for (const p of patterns) if (p.test(t)) hits++;
+      if (hits < 2) continue;
+
+      // Walk up and hide the most toast-like container
+      let best = null;
+      let el = n;
+      for (let i = 0; i < 20 && el; i++) {
+        if (looksLikeToastContainer(el) && isVisible(el)) best = el;
+        el = el.parentElement;
+      }
+      if (best) hideEl(best);
+    }
+  };
+
+  // Initial run
+  findAndHide();
+
+  // Observe DOM updates and re-hide when ToS re-renders the toast
+  const mo = new MutationObserver((mutations) => {
+    for (const m of mutations) {
+      for (const node of m.addedNodes) {
+        if (node.nodeType !== 1) continue;
+        // Scan just the added subtree
+        findAndHide(node);
+      }
+    }
+  });
+  mo.observe(document.documentElement, { childList: true, subtree: true });
+
+  // Provide controls
+  window.__tosToastBlock = {
+    stop() {
+      mo.disconnect();
+      console.log(TAG, "stopped");
+    },
+    restore() {
+      mo.disconnect();
+      // restore inline styles for any still-connected nodes we modified
+      document.querySelectorAll("[data-tos-toast-hidden='1']").forEach(el => {
+        const prev = hidden.get(el);
+        if (prev) el.setAttribute("style", prev);
+        else el.removeAttribute("style");
+        el.removeAttribute("data-tos-toast-hidden");
+      });
+      console.log(TAG, "restored (refresh also works)");
+    }
+  };
+
+  console.log(TAG, "active. Stop: __tosToastBlock.stop()  Restore: __tosToastBlock.restore()");
+})();
